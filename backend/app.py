@@ -97,5 +97,28 @@ def search_posts():
 
     return jsonify(filtered_posts), 200
 
+from flask import Flask, jsonify, request
+
+app = Flask(__name__)
+
+
+@app.route("/api/posts", methods=["GET"])
+def get_posts():
+    """sorts posts by title or content"""
+    sort_field = request.args.get("sort")       # "title" or "content"
+    direction = request.args.get("direction", "asc")  # "asc" oder "desc"?
+
+    sorted_posts = posts.copy()
+
+    if sort_field in ["title", "content"]:
+        reverse = True if direction == "desc" else False
+        sorted_posts.sort(key=lambda p: p[sort_field].lower(), reverse=reverse)
+
+    return jsonify(sorted_posts), 200
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
