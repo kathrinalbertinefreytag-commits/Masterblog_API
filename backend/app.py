@@ -1,145 +1,139 @@
-from flask import Flask, request, jsonify
-from flask_swagger_ui import get_swaggerui_blueprint
-from flask_swagger import swagger
-
-SWAGGER_URL="/api/docs"  # (1) swagger endpoint e.g. HTTP://localhost:5002/api/docs
-API_URL="/static/masterblog.json" # (2) ensure you create this dir and file
-
-swagger_ui_blueprint = get_swaggerui_blueprint(
-    SWAGGER_URL,
-    API_URL,
-    config={
-        'app_name': 'Masterblog API' # (3) You can change this if you like
-    }
-)
+from flask import Flask, request
+from flask_restx import Api, Resource, fields
 
 app = Flask(__name__)
 
+api = Api(
+    app,
+    version="1.0",
+    title="My API",
+    description="Simple Posts API",
+    doc="/docs"  # Swagger UI
+)
 
-app.register_blueprint(swagger_ui_blueprint, url_prefix=SWAGGER_URL)
+ns = api.namespace("posts", description="Post operations")
 
-
+# In-memory data
 posts = [
     {"id": 1, "title": "Hello", "content": "First post"},
     {"id": 2, "title": "Another", "content": "Second post"}
 ]
 
-
-@app.route("/api/posts", methods=["POST"])
-def add_post():
-    """adding a post to the database"""
-    data = request.get_json()
-
-    #validating
-    if not data or "title" not in data or "content" not in data:
-        return jsonify({"error": "title and content are required"}), 400
-
-    #creating new id
-    new_id = max(post["id"] for post in posts) + 1 if posts else 1
-
-    new_post = {
-        "id": new_id,
-        "title": data["title"],
-        "content": data["content"]
+# -------------------- Models --------------------
+post_model = api.model(
+    "Post",
+    {
+        "id": fields.Integer(readOnly=True, example=1),
+        "title": fields.String(required=True, example="Hello"),
+        "content": fields.String(required=True, example="First post"),
     }
+)
 
-    posts.append(new_post)
+post_input_model = api.model(
+    "PostInput",
+    {
+        "title": fields.String(required=True),
+        "content": fields.String(required=True),
+    }
+)
 
-    return jsonify(new_post), 201
+post_update_model = api.model(
+    "PostUpdate",
+    {
+        "title": fields.String(),
+        "content": fields.String(),
+    }
+)
 
-@app.route("/api/posts/<int:post_id>", methods=["DELETE"])
-def delete_post(post_id):
-    """deletes post with given id"""
-    global posts
+error_model = api.model(
+    "Error",
+    {"error": fields.String(example="Post not found")}
+)
 
-    # Post suchen
-    post = next((p for p in posts if p["id"] == post_id), None)
+# -------------------- /posts --------------------
+@ns.route("")
+class PostList(Resource):
 
-    if post is None:
-        return jsonify({"error": "Post not found"}), 404
+    @ns.marshal_list_with(post_model)
+    @ns.param("sort", "Sort by title or content")
+    @ns.param("direction", "asc or desc", default="asc")
+    def get(self):
+        """Get all posts (optional sorting)"""
+        sort_field = request.args.get("sort")
+        direction = request.args.get("direction", "asc")
 
-    posts = [p for p in posts if p["id"] != post_id]
+        result = posts.copy()
+        if sort_field in ["title", "content"]:
+            result.sort(
+                key=lambda p: p[sort_field].lower(),
+                reverse=(direction == "desc")
+            )
+        return result
 
-    return jsonify(post), 200
+    @ns.expect(post_input_model, validate=True)
+    @ns.marshal_with(post_model, code=201)
+    def post(self):
+        """Create a new post"""
+        data = api.payload
+        new_id = max(p["id"] for p in posts) + 1 if posts else 1
 
-
-@app.route("/api/posts/<int:post_id>", methods=["PUT"])
-def update_post(post_id):
-    """updating post by searching post by id and actualizing the fields bei post"""
-    #searching post
-    post = None
-    for p in posts:
-        if p["id"] == post_id:
-            post = p
-            break
-
-    #if post does not exist
-    if post is None:
-        return jsonify({"error": "Post not found"}), 404
-
-    #loading JsonData
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "No data provided"}), 400
-
-    #actualizing given fields
-    if "title" in data:
-        post["title"] = data["title"]
-
-    if "content" in data:
-        post["content"] = data["content"]
-
-
-    return jsonify(post), 200
-
-from flask import Flask, jsonify, request
-
-app = Flask(__name__)
-
-
-
-@app.route("/api/posts/search", methods=["GET"])
-def search_posts():
-    """searching posts by title or content"""
-    title_query = request.args.get("title", "").lower()
-    content_query = request.args.get("content", "").lower()
-
-    filtered_posts = []
-    for post in posts:
-        title_match = title_query in post["title"].lower() if title_query else False
-        content_match = content_query in post["content"].lower() if content_query else False
-
-        if title_match or content_match:
-            filtered_posts.append(post)
-
-    return jsonify(filtered_posts), 200
-
-from flask import Flask, jsonify, request
-
-app = Flask(__name__)
+        new_post = {
+            "id": new_id,
+            "title": data["title"],
+            "content": data["content"]
+        }
+        posts.append(new_post)
+        return new_post, 201
 
 
-@app.route("/api/posts", methods=["GET"])
-def get_posts():
-    """sorts posts by title or content"""
-    sort_field = request.args.get("sort")       # "title" or "content"
-    direction = request.args.get("direction", "asc")  # "asc" oder "desc"?
+# -------------------- /posts/search --------------------
+@ns.route("/search")
+class PostSearch(Resource):
 
-    sorted_posts = posts.copy()
+    @ns.marshal_list_with(post_model)
+    @ns.param("title", "Search by title")
+    @ns.param("content", "Search by content")
+    def get(self):
+        """Search posts"""
+        title_query = request.args.get("title", "").lower()
+        content_query = request.args.get("content", "").lower()
 
-    if sort_field in ["title", "content"]:
-        reverse = True if direction == "desc" else False
-        sorted_posts.sort(key=lambda p: p[sort_field].lower(), reverse=reverse)
+        return [
+            p for p in posts
+            if (title_query and title_query in p["title"].lower())
+            or (content_query and content_query in p["content"].lower())
+        ]
 
-    return jsonify(sorted_posts), 200
+
+# -------------------- /posts/<id> --------------------
+@ns.route("/<int:post_id>")
+@ns.response(404, "Post not found", error_model)
+class PostItem(Resource):
+
+    @ns.marshal_with(post_model)
+    def delete(self, post_id):
+        """Delete a post"""
+        global posts
+        post = next((p for p in posts if p["id"] == post_id), None)
+        if not post:
+            api.abort(404, "Post not found")
+
+        posts = [p for p in posts if p["id"] != post_id]
+        return post
+
+    @ns.expect(post_update_model, validate=True)
+    @ns.marshal_with(post_model)
+    def put(self, post_id):
+        """Update a post"""
+        post = next((p for p in posts if p["id"] == post_id), None)
+        if not post:
+            api.abort(404, "Post not found")
+
+        data = api.payload
+        post.update({k: v for k, v in data.items() if v is not None})
+        return post
 
 
-@app.route("/spec")
-def spec():
-    return jsonify(swagger(app))
-
+# -------------------- Run --------------------
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
-
-
-
+    app.run(debug=True, port=5001)
